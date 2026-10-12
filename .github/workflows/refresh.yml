@@ -11,7 +11,7 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -50,23 +50,12 @@ jobs:
               raise
           PY
 
-      - name: Run crawler
+      - name: Run Outage Radar
         env:
           PUBLISH_URL: ${{ secrets.PUBLISH_URL }}
           PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
           SCAN_LIMIT: "90"
+          EMERGENCY_SCAN_LIMIT: "320"
           MAX_WORKERS: "14"
           DNS_TIMEOUT: "4.0"
-        run: |
-          python - <<'PY'
-          import runpy
-          import urllib.request
-
-          opener = urllib.request.build_opener()
-          opener.addheaders = [
-              ("User-Agent", "GeminiDNSRadar/1.0"),
-              ("Accept", "application/json"),
-          ]
-          urllib.request.install_opener(opener)
-          runpy.run_path("crawler/crawler.py", run_name="__main__")
-          PY
+        run: python crawler/radar.py
