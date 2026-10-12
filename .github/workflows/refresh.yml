@@ -2,11 +2,17 @@ name: Refresh Gemini DNS ranking
 
 on:
   schedule:
-    - cron: "7 * * * *"
+    # Watchdog wakes up every 10 minutes. It runs a full scan only when
+    # the last successful state is older than 50 minutes.
+    - cron: "2,12,22,32,42,52 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: gemini-dns-radar-refresh
+  cancel-in-progress: false
 
 jobs:
   refresh:
@@ -19,38 +25,66 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Check Worker API
+      - name: Check freshness and Worker API
+        id: freshness
         env:
           PUBLISH_URL: ${{ secrets.PUBLISH_URL }}
           PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
         run: |
           python - <<'PY'
+          import datetime as dt
+          import json
           import os
           import urllib.error
           import urllib.request
 
-          url = os.environ["PUBLISH_URL"].rstrip("/") + "/api/state"
+          base = os.environ["PUBLISH_URL"].rstrip("/")
           token = os.environ["PUBLISH_TOKEN"]
+          event = os.environ.get("GITHUB_EVENT_NAME", "")
+
           req = urllib.request.Request(
-              url,
+              base + "/api/state",
               headers={
                   "Authorization": f"Bearer {token}",
                   "User-Agent": "GeminiDNSRadar/1.0",
                   "Accept": "application/json",
               },
           )
+
           try:
               with urllib.request.urlopen(req, timeout=25) as response:
+                  state = json.loads(response.read().decode("utf-8"))
                   print("Worker API preflight:", response.status)
-                  print(response.read().decode("utf-8", errors="replace")[:1000])
           except urllib.error.HTTPError as exc:
               body = exc.read().decode("utf-8", errors="replace")
               print(f"Worker API preflight failed: HTTP {exc.code}")
               print(body[:2000])
               raise
+
+          updated_at = state.get("updated_at")
+          should_run = event == "workflow_dispatch"
+
+          if should_run:
+              reason = "manual dispatch always forces a scan"
+          elif not updated_at:
+              should_run = True
+              reason = "no previous successful update"
+          else:
+              updated = dt.datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+              now = dt.datetime.now(dt.timezone.utc)
+              age_minutes = (now - updated).total_seconds() / 60
+              should_run = age_minutes >= 50
+              reason = f"state age is {age_minutes:.1f} minutes"
+
+          print("Last successful update:", updated_at or "none")
+          print("Decision:", "RUN" if should_run else "SKIP", "-", reason)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"run={'true' if should_run else 'false'}\n")
           PY
 
       - name: Run Outage Radar
+        if: steps.freshness.outputs.run == 'true'
         env:
           PUBLISH_URL: ${{ secrets.PUBLISH_URL }}
           PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
@@ -59,3 +93,7 @@ jobs:
           MAX_WORKERS: "14"
           DNS_TIMEOUT: "4.0"
         run: python crawler/radar.py
+
+      - name: Fresh data - scan not needed
+        if: steps.freshness.outputs.run != 'true'
+        run: echo "Radar data is still fresh; watchdog check completed successfully."
