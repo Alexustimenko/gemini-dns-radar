@@ -9,7 +9,6 @@ import urllib.request
 from pathlib import Path
 
 # Cloudflare can be stricter with requests coming from default Python urllib User-Agent.
-# Install the same headers for local runs and GitHub Actions.
 opener = urllib.request.build_opener()
 opener.addheaders = [
     ("User-Agent", "GeminiDNSRadar/1.0"),
@@ -28,9 +27,82 @@ BASE_SCAN_LIMIT = int(os.environ.get("SCAN_LIMIT", "90"))
 EMERGENCY_SCAN_LIMIT = int(os.environ.get("EMERGENCY_SCAN_LIMIT", "320"))
 
 
+def normalize_state(state: dict) -> tuple[dict, bool]:
+    """Make state written by older crawler versions safe for the current crawler."""
+    if not isinstance(state, dict):
+        return {"version": 1, "candidates": {}, "top10": []}, True
+
+    changed = False
+    candidates = state.get("candidates")
+    if not isinstance(candidates, dict):
+        candidates = {}
+        state["candidates"] = candidates
+        changed = True
+
+    for host, record in list(candidates.items()):
+        if not isinstance(record, dict):
+            candidates[host] = {
+                "host": host,
+                "sources": [],
+                "special_source": False,
+                "history": [],
+                "last": {},
+                "score": 0,
+            }
+            changed = True
+            continue
+
+        if not isinstance(record.get("last"), dict):
+            record["last"] = {}
+            changed = True
+
+        if not isinstance(record.get("history"), list):
+            record["history"] = []
+            changed = True
+
+        if not isinstance(record.get("sources"), list):
+            record["sources"] = []
+            changed = True
+
+        if "host" not in record:
+            record["host"] = host
+            changed = True
+
+        if "special_source" not in record:
+            record["special_source"] = False
+            changed = True
+
+        if "score" not in record:
+            record["score"] = 0
+            changed = True
+
+    if not isinstance(state.get("top10"), list):
+        state["top10"] = []
+        changed = True
+
+    return state, changed
+
+
+# Protect the old crawler itself: every GET /api/state is normalized before
+# crawler.py sees it. This does not depend on Cloudflare KV propagation speed.
+_original_api_json = core.api_json
+
+
+def safe_api_json(path: str, method: str = "GET", payload=None):
+    data = _original_api_json(path, method=method, payload=payload)
+    if path == "/api/state" and method == "GET":
+        normalized, _ = normalize_state(data)
+        return normalized
+    return data
+
+
+core.api_json = safe_api_json
+
+
 def working_hosts(state: dict) -> set[str]:
     result: set[str] = set()
-    for host, record in (state.get("candidates") or {}).items():
+    normalized, _ = normalize_state(state)
+    for host, record in normalized.get("candidates", {}).items():
         if (record.get("last") or {}).get("gemini_likely"):
             result.add(host)
     return result
@@ -132,11 +204,18 @@ def attach_radar(previous: dict, state: dict, emergency_used: bool, base_scanned
 
 
 def main() -> None:
-    previous = core.api_json("/api/state")
+    previous_raw = _original_api_json("/api/state")
+    previous, changed = normalize_state(previous_raw)
+
+    # Persist the cleanup too, but crawler safety does not depend on this write.
+    if changed:
+        print("Radar: legacy state detected; normalizing before scan")
+        _original_api_json("/api/publish", method="POST", payload=previous)
 
     core.SCAN_LIMIT = BASE_SCAN_LIMIT
     print(f"Radar mode=normal scan_limit={BASE_SCAN_LIMIT}")
     core.main()
+
     first_state = core.api_json("/api/state")
     base_scanned = int((first_state.get("scan") or {}).get("scanned_this_run", 0))
 
@@ -154,7 +233,7 @@ def main() -> None:
         final_state = first_state
 
     final_state = attach_radar(previous, final_state, emergency_used, base_scanned)
-    result = core.api_json("/api/publish", method="POST", payload=final_state)
+    result = _original_api_json("/api/publish", method="POST", payload=final_state)
 
     outage = final_state["scan"]["outage"]
     print(
