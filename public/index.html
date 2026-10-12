@@ -27,6 +27,32 @@
         </div>
       </div>
 
+      <section id="radarPanel" class="radar-panel radar-learning">
+        <div class="radar-top">
+          <div>
+            <p class="eyebrow">OUTAGE RADAR</p>
+            <div class="radar-title-row">
+              <span id="radarDot" class="radar-dot"></span>
+              <h2 id="radarLabel">LEARNING</h2>
+            </div>
+            <strong id="radarTitle">Набираем базовую линию</strong>
+            <p id="radarMessage">После нескольких запусков система начнёт автоматически замечать массовые отвалы DNS.</p>
+          </div>
+          <div class="radar-mode">
+            <span>Режим сканирования</span>
+            <b id="scanMode">NORMAL</b>
+            <small id="scanLimit">90 кандидатов</small>
+          </div>
+        </div>
+        <div class="radar-stats">
+          <div><span>Было рабочих</span><b id="previousWorking">—</b></div>
+          <div><span>Работает сейчас</span><b id="workingNow">—</b></div>
+          <div><span>Отвалилось</span><b id="failedCount">—</b></div>
+          <div><span>Новых / вернулись</span><b id="newCount">—</b></div>
+        </div>
+        <div id="changesBox" class="changes-box hidden"></div>
+      </section>
+
       <div class="checker">
         <div class="checker-copy">
           <strong>Проверить свой DNS</strong>
@@ -59,7 +85,7 @@
       <div class="how-grid">
         <article><b>01</b><h3>Сбор</h3><p>Каждый час crawler забирает актуальные DoT-кандидаты из публичных списков и специализированных страниц.</p></article>
         <article><b>02</b><h3>DoT / Android</h3><p>Python подключается к hostname на TLS-порту 853 — это тот же класс Private DNS, который принимает Android.</p></article>
-        <article><b>03</b><h3>Gemini-сигнал</h3><p>Проверяются Gemini, AI Studio, NotebookLM и Gemini API. Если DNS возвращает для нескольких целей IP вне опубликованных сетей Google, это сильный признак SmartDNS-прокси.</p></article>
+        <article><b>03</b><h3>Outage Radar</h3><p>Если за один цикл пропадает не меньше 30% ранее рабочих DNS, система включает аварийный режим и расширяет скан до нескольких сотен кандидатов.</p></article>
         <article><b>04</b><h3>Рейтинг</h3><p>Учитываются текущий статус, история за 24 часа/7 дней, серия успешных проверок, источник и задержка.</p></article>
       </div>
       <p class="disclaimer">Важно: серверная проверка не может на 100% гарантировать поведение конкретного Pixel у конкретного белорусского оператора. Поэтому сайт показывает автоматический технический сигнал и историю стабильности, а не обещание “будет работать всегда”.</p>
