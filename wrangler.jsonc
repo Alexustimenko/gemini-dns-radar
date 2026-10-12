@@ -1,0 +1,21 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "gemini-dns-radar",
+	"main": "src/entry.py",
+	"compatibility_date": "2026-10-12",
+	"compatibility_flags": [
+		"python_workers"
+	],
+	"assets": {
+		"directory": "./public",
+		"run_worker_first": [
+			"/api/*"
+		]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "STATE",
+			"id": "5f06a2878d304591b7d1e0b6221f6b6c"
+		}
+	]
+}

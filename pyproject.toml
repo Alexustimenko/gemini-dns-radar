@@ -1,0 +1,12 @@
+[project]
+name = "gemini-dns-radar"
+version = "0.1.0"
+description = "Cloudflare Python Worker + hourly Python DoT crawler for Gemini SmartDNS monitoring"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "workers-py>=1.17.7",
+    "workers-runtime-sdk>=1.9.3",
+]

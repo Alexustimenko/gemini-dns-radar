@@ -1,0 +1,27 @@
+name: Refresh Gemini DNS ranking
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run crawler
+        env:
+          PUBLISH_URL: ${{ secrets.PUBLISH_URL }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          SCAN_LIMIT: "90"
+          MAX_WORKERS: "14"
+          DNS_TIMEOUT: "4.0"
+        run: python crawler/crawler.py

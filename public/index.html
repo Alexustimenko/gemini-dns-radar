@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Автоматический мониторинг Private DNS, которые могут помогать с Gemini на Android.">
+  <title>Gemini DNS Radar</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="hero">
+    <div class="shell">
+      <div class="brand"><span class="pulse"></span> Gemini DNS Radar</div>
+      <div class="hero-grid">
+        <div>
+          <p class="eyebrow">AUTO • HOURLY • PRIVATE DNS</p>
+          <h1>Рабочие DNS для <span>Gemini</span> — без ручного списка.</h1>
+          <p class="lead">Crawler сам собирает кандидатов, проверяет Android Private DNS (DoT), ищет SmartDNS-прокси для Gemini и каждый час пересчитывает TOP‑10.</p>
+        </div>
+        <div class="stat-card">
+          <span>Последнее обновление</span>
+          <strong id="updatedAt">—</strong>
+          <div class="mini-stats">
+            <div><b id="candidateCount">—</b><span>кандидатов</span></div>
+            <div><b id="workingCount">—</b><span>рабочих</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="checker">
+        <div class="checker-copy">
+          <strong>Проверить свой DNS</strong>
+          <span>Если он уже в мониторинге — покажем последний DoT-результат. Новый DNS сразу проверим по DoH и поставим в очередь на полный DoT-скан.</span>
+        </div>
+        <div class="checker-row">
+          <input id="dnsInput" type="text" placeholder="dns.example.com" autocomplete="off" spellcheck="false">
+          <button id="checkBtn">Проверить</button>
+        </div>
+        <div id="checkResult" class="check-result hidden"></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="section-head">
+      <div>
+        <p class="eyebrow">LIVE RANKING</p>
+        <h2>TOP‑10 сейчас</h2>
+      </div>
+      <button id="refreshBtn" class="ghost">Обновить</button>
+    </section>
+
+    <div id="notice" class="notice hidden"></div>
+    <section id="dnsGrid" class="grid"></section>
+
+    <section class="how">
+      <p class="eyebrow">КАК ЭТО РАБОТАЕТ</p>
+      <h2>Не обычный “DNS отвечает”, а SmartDNS-сигнал.</h2>
+      <div class="how-grid">
+        <article><b>01</b><h3>Сбор</h3><p>Каждый час crawler забирает актуальные DoT-кандидаты из публичных списков и специализированных страниц.</p></article>
+        <article><b>02</b><h3>DoT / Android</h3><p>Python подключается к hostname на TLS-порту 853 — это тот же класс Private DNS, который принимает Android.</p></article>
+        <article><b>03</b><h3>Gemini-сигнал</h3><p>Проверяются Gemini, AI Studio, NotebookLM и Gemini API. Если DNS возвращает для нескольких целей IP вне опубликованных сетей Google, это сильный признак SmartDNS-прокси.</p></article>
+        <article><b>04</b><h3>Рейтинг</h3><p>Учитываются текущий статус, история за 24 часа/7 дней, серия успешных проверок, источник и задержка.</p></article>
+      </div>
+      <p class="disclaimer">Важно: серверная проверка не может на 100% гарантировать поведение конкретного Pixel у конкретного белорусского оператора. Поэтому сайт показывает автоматический технический сигнал и историю стабильности, а не обещание “будет работать всегда”.</p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
