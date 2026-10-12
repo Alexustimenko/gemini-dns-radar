@@ -191,6 +191,7 @@ async def _dispatch_github(env, reason, cron="manual-test"):
 
 class Default(WorkerEntrypoint):
     async def scheduled(self, controller, env, ctx):
+        env = env or self.env
         cron = str(controller.cron)
         now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
