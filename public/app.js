@@ -7,6 +7,17 @@ const refreshBtn = document.getElementById('refreshBtn');
 const dnsInput = document.getElementById('dnsInput');
 const checkBtn = document.getElementById('checkBtn');
 const checkResult = document.getElementById('checkResult');
+const radarPanel = document.getElementById('radarPanel');
+const radarLabel = document.getElementById('radarLabel');
+const radarTitle = document.getElementById('radarTitle');
+const radarMessage = document.getElementById('radarMessage');
+const scanMode = document.getElementById('scanMode');
+const scanLimit = document.getElementById('scanLimit');
+const previousWorking = document.getElementById('previousWorking');
+const workingNow = document.getElementById('workingNow');
+const failedCount = document.getElementById('failedCount');
+const newCount = document.getElementById('newCount');
+const changesBox = document.getElementById('changesBox');
 
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
 
@@ -17,6 +28,42 @@ function when(value) {
 
 function riskClass(level) {
   return ({low:'ok', medium:'warn', high:'bad', unknown:'muted'})[level] || 'muted';
+}
+
+function radarClass(level) {
+  return ({normal:'radar-normal', watch:'radar-watch', degraded:'radar-degraded', critical:'radar-critical', learning:'radar-learning'})[level] || 'radar-learning';
+}
+
+function renderRadar(scan = {}) {
+  const outage = scan.outage || {
+    level:'learning', label:'LEARNING', title:'Набираем базовую линию',
+    message:'После нескольких запусков Radar сможет замечать массовые отвалы.'
+  };
+
+  radarPanel.className = `radar-panel ${radarClass(outage.level)}`;
+  radarLabel.textContent = outage.label || 'LEARNING';
+  radarTitle.textContent = outage.title || 'Набираем базовую линию';
+  radarMessage.textContent = outage.message || '—';
+  scanMode.textContent = (scan.mode || 'normal').toUpperCase();
+  scanLimit.textContent = `${scan.scan_limit ?? 90} кандидатов`;
+  previousWorking.textContent = outage.previous_working ?? '—';
+  workingNow.textContent = outage.working_now ?? scan.working_count ?? '—';
+  failedCount.textContent = outage.failed_count ?? '—';
+  newCount.textContent = outage.new_count ?? '—';
+
+  const failed = outage.failed_hosts || [];
+  const added = outage.new_hosts || [];
+  if (!failed.length && !added.length) {
+    changesBox.classList.add('hidden');
+    changesBox.innerHTML = '';
+    return;
+  }
+
+  const parts = [];
+  if (failed.length) parts.push(`<div><span>Отвалились:</span><b>${failed.map(esc).join(', ')}</b></div>`);
+  if (added.length) parts.push(`<div><span>Новые / восстановились:</span><b>${added.map(esc).join(', ')}</b></div>`);
+  changesBox.innerHTML = parts.join('');
+  changesBox.classList.remove('hidden');
 }
 
 function card(item, index) {
@@ -58,6 +105,8 @@ async function loadTop() {
     updatedAt.textContent = when(data.updated_at);
     candidateCount.textContent = data.scan?.candidate_count ?? '—';
     workingCount.textContent = data.scan?.working_count ?? '—';
+    renderRadar(data.scan || {});
+
     const rows = data.top10 || [];
     if (!rows.length) {
       grid.innerHTML = '';
