@@ -4,6 +4,7 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -18,8 +19,9 @@ urllib.request.install_opener(opener)
 
 CORE_PATH = Path(__file__).with_name("crawler.py")
 spec = importlib.util.spec_from_file_location("gemini_dns_crawler_core", CORE_PATH)
-core = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
+core = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = core
 spec.loader.exec_module(core)
 
 BASE_SCAN_LIMIT = int(os.environ.get("SCAN_LIMIT", "90"))
@@ -132,7 +134,6 @@ def attach_radar(previous: dict, state: dict, emergency_used: bool, base_scanned
 def main() -> None:
     previous = core.api_json("/api/state")
 
-    # Normal hourly pass.
     core.SCAN_LIMIT = BASE_SCAN_LIMIT
     print(f"Radar mode=normal scan_limit={BASE_SCAN_LIMIT}")
     core.main()
