@@ -42,14 +42,13 @@ jobs:
           token = os.environ["PUBLISH_TOKEN"]
           event = os.environ.get("GITHUB_EVENT_NAME", "")
 
-          req = urllib.request.Request(
-              base + "/api/state",
-              headers={
-                  "Authorization": f"Bearer {token}",
-                  "User-Agent": "GeminiDNSRadar/1.0",
-                  "Accept": "application/json",
-              },
-          )
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "User-Agent": "GeminiDNSRadar/1.0",
+              "Accept": "application/json",
+          }
+
+          req = urllib.request.Request(base + "/api/state", headers=headers)
 
           try:
               with urllib.request.urlopen(req, timeout=25) as response:
@@ -60,6 +59,53 @@ jobs:
               print(f"Worker API preflight failed: HTTP {exc.code}")
               print(body[:2000])
               raise
+
+          # Compatibility cleanup for state written by older crawler versions.
+          # In particular, old records may contain last=null, while current code
+          # expects last to be an object.
+          changed = False
+          candidates = state.get("candidates")
+          if not isinstance(candidates, dict):
+              candidates = {}
+              state["candidates"] = candidates
+              changed = True
+
+          for host, record in list(candidates.items()):
+              if not isinstance(record, dict):
+                  candidates[host] = {
+                      "host": host,
+                      "sources": [],
+                      "special_source": False,
+                      "history": [],
+                      "last": {},
+                      "score": 0,
+                  }
+                  changed = True
+                  continue
+
+              if record.get("last") is None:
+                  record["last"] = {}
+                  changed = True
+              if record.get("history") is None:
+                  record["history"] = []
+                  changed = True
+              if record.get("sources") is None:
+                  record["sources"] = []
+                  changed = True
+
+          if changed:
+              payload = json.dumps(state, ensure_ascii=False).encode("utf-8")
+              publish_headers = dict(headers)
+              publish_headers["Content-Type"] = "application/json"
+              publish_req = urllib.request.Request(
+                  base + "/api/publish",
+                  data=payload,
+                  method="POST",
+                  headers=publish_headers,
+              )
+              with urllib.request.urlopen(publish_req, timeout=25) as response:
+                  print("Legacy state normalized:", response.status)
+                  print(response.read().decode("utf-8", errors="replace")[:1000])
 
           updated_at = state.get("updated_at")
           should_run = event == "workflow_dispatch"
