@@ -14,9 +14,42 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
+      - name: Check Worker API
+        env:
+          PUBLISH_URL: ${{ secrets.PUBLISH_URL }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import urllib.error
+          import urllib.request
+
+          url = os.environ["PUBLISH_URL"].rstrip("/") + "/api/state"
+          token = os.environ["PUBLISH_TOKEN"]
+          req = urllib.request.Request(
+              url,
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "User-Agent": "GeminiDNSRadar/1.0",
+                  "Accept": "application/json",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=25) as response:
+                  print("Worker API preflight:", response.status)
+                  print(response.read().decode("utf-8", errors="replace")[:1000])
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              print(f"Worker API preflight failed: HTTP {exc.code}")
+              print(body[:2000])
+              raise
+          PY
+
       - name: Run crawler
         env:
           PUBLISH_URL: ${{ secrets.PUBLISH_URL }}
@@ -24,4 +57,16 @@ jobs:
           SCAN_LIMIT: "90"
           MAX_WORKERS: "14"
           DNS_TIMEOUT: "4.0"
-        run: python crawler/crawler.py
+        run: |
+          python - <<'PY'
+          import runpy
+          import urllib.request
+
+          opener = urllib.request.build_opener()
+          opener.addheaders = [
+              ("User-Agent", "GeminiDNSRadar/1.0"),
+              ("Accept", "application/json"),
+          ]
+          urllib.request.install_opener(opener)
+          runpy.run_path("crawler/crawler.py", run_name="__main__")
+          PY
