@@ -2,10 +2,15 @@ name: Refresh Gemini DNS ranking
 
 on:
   schedule:
-    # Watchdog wakes up every 10 minutes. It runs a full scan only when
-    # the last successful state is older than 50 minutes.
+    # GitHub scheduler remains only as a backup watchdog.
     - cron: "2,12,22,32,42,52 * * * *"
   workflow_dispatch:
+    inputs:
+      source:
+        description: "Who triggered the workflow"
+        required: false
+        default: "manual"
+        type: string
 
 permissions:
   contents: read
@@ -60,9 +65,6 @@ jobs:
               print(body[:2000])
               raise
 
-          # Compatibility cleanup for state written by older crawler versions.
-          # In particular, old records may contain last=null, while current code
-          # expects last to be an object.
           changed = False
           candidates = state.get("candidates")
           if not isinstance(candidates, dict):
@@ -111,7 +113,7 @@ jobs:
           should_run = event == "workflow_dispatch"
 
           if should_run:
-              reason = "manual dispatch always forces a scan"
+              reason = "workflow_dispatch forces a scan"
           elif not updated_at:
               should_run = True
               reason = "no previous successful update"
