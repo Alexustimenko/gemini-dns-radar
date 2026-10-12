@@ -1,4 +1,5 @@
 import base64
+import datetime as dt
 import json
 import re
 import struct
@@ -10,6 +11,11 @@ from workers import Response, WorkerEntrypoint, fetch
 
 STATE_KEY = "radar_state_v1"
 QUEUE_KEY = "manual_queue_v1"
+SCHEDULER_KEY = "scheduler_status_v1"
+GITHUB_DISPATCH_URL = "https://api.github.com/repos/Alexustimenko/gemini-dns-radar/actions/workflows/refresh.yml/dispatches"
+PRIMARY_CRON = "7 * * * *"
+WATCHDOG_CRON = "*/10 * * * *"
+WATCHDOG_STALE_MINUTES = 65
 HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$")
 MANUAL_DOMAINS = [
     "gemini.google.com",
@@ -131,15 +137,92 @@ async def _manual_probe(host):
     }
 
 
+def _state_age_minutes(state):
+    updated_at = state.get("updated_at") if isinstance(state, dict) else None
+    if not updated_at:
+        return None
+    try:
+        updated = dt.datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+        now = dt.datetime.now(dt.timezone.utc)
+        return max(0.0, (now - updated).total_seconds() / 60)
+    except Exception:
+        return None
+
+
 class Default(WorkerEntrypoint):
+    async def scheduled(self, controller, env, ctx):
+        cron = str(controller.cron)
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+        raw = await env.STATE.get(STATE_KEY)
+        state = json.loads(str(raw)) if raw else {}
+        age_minutes = _state_age_minutes(state)
+
+        should_dispatch = cron == PRIMARY_CRON
+        reason = "primary hourly trigger"
+
+        if cron == WATCHDOG_CRON:
+            should_dispatch = age_minutes is None or age_minutes >= WATCHDOG_STALE_MINUTES
+            if age_minutes is None:
+                reason = "watchdog: no successful state yet"
+            elif should_dispatch:
+                reason = f"watchdog: state is stale ({age_minutes:.1f} min)"
+            else:
+                reason = f"watchdog: state still fresh ({age_minutes:.1f} min)"
+
+        status = {
+            "checked_at": now,
+            "cron": cron,
+            "state_age_minutes": round(age_minutes, 1) if age_minutes is not None else None,
+            "dispatched": False,
+            "reason": reason,
+        }
+
+        if not should_dispatch:
+            await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
+            return
+
+        token = str(getattr(env, "GITHUB_DISPATCH_TOKEN", ""))
+        if not token:
+            status["error"] = "GITHUB_DISPATCH_TOKEN is not configured"
+            await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
+            raise RuntimeError(status["error"])
+
+        response = await fetch(
+            GITHUB_DISPATCH_URL,
+            method="POST",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2026-03-10",
+                "User-Agent": "GeminiDNSRadar-Cloudflare-Scheduler/1.0",
+                "Content-Type": "application/json",
+            },
+            body=json.dumps({"ref": "main", "inputs": {"source": "cloudflare"}}),
+        )
+
+        status["github_status"] = int(response.status)
+        if 200 <= response.status < 300:
+            status["dispatched"] = True
+            status["reason"] = reason + "; GitHub workflow dispatched"
+            await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
+            return
+
+        body = await response.text()
+        status["error"] = f"GitHub dispatch HTTP {response.status}: {str(body)[:500]}"
+        await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
+        raise RuntimeError(status["error"])
+
     async def fetch(self, request):
         url = urlparse(request.url)
         path = url.path
 
         if path == "/api/top" and request.method == "GET":
             raw = await self.env.STATE.get(STATE_KEY)
+            scheduler_raw = await self.env.STATE.get(SCHEDULER_KEY)
+            scheduler = json.loads(str(scheduler_raw)) if scheduler_raw else {}
             if raw is None:
-                return _json_response({"updated_at": None, "top10": [], "status": "waiting_for_first_scan"})
+                return _json_response({"updated_at": None, "top10": [], "status": "waiting_for_first_scan", "scheduler": scheduler})
             state = json.loads(str(raw))
             return _json_response(
                 {
@@ -147,8 +230,15 @@ class Default(WorkerEntrypoint):
                     "next_expected_update": state.get("next_expected_update"),
                     "scan": state.get("scan", {}),
                     "top10": state.get("top10", []),
+                    "scheduler": scheduler,
                 }
             )
+
+        if path == "/api/scheduler" and request.method == "GET":
+            raw = await self.env.STATE.get(SCHEDULER_KEY)
+            if raw is None:
+                return _json_response({"status": "waiting_for_first_cron"})
+            return Response(str(raw), headers={"content-type": "application/json; charset=utf-8", "cache-control": "no-store"})
 
         if path == "/api/state" and request.method == "GET":
             if not _authorized(request, self.env):
