@@ -149,6 +149,46 @@ def _state_age_minutes(state):
         return None
 
 
+async def _dispatch_github(env, reason, cron="manual-test"):
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    status = {
+        "checked_at": now,
+        "cron": cron,
+        "dispatched": False,
+        "reason": reason,
+    }
+
+    token = str(getattr(env, "GITHUB_DISPATCH_TOKEN", ""))
+    if not token:
+        status["error"] = "GITHUB_DISPATCH_TOKEN is not configured"
+        await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
+        return status
+
+    response = await fetch(
+        GITHUB_DISPATCH_URL,
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "GeminiDNSRadar-Cloudflare-Scheduler/1.0",
+            "Content-Type": "application/json",
+        },
+        body=json.dumps({"ref": "main", "inputs": {"source": "cloudflare"}}),
+    )
+
+    status["github_status"] = int(response.status)
+    if 200 <= response.status < 300:
+        status["dispatched"] = True
+        status["reason"] = reason + "; GitHub workflow dispatched"
+    else:
+        body = await response.text()
+        status["error"] = f"GitHub dispatch HTTP {response.status}: {str(body)[:500]}"
+
+    await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
+    return status
+
+
 class Default(WorkerEntrypoint):
     async def scheduled(self, controller, env, ctx):
         cron = str(controller.cron)
@@ -170,48 +210,22 @@ class Default(WorkerEntrypoint):
             else:
                 reason = f"watchdog: state still fresh ({age_minutes:.1f} min)"
 
-        status = {
-            "checked_at": now,
-            "cron": cron,
-            "state_age_minutes": round(age_minutes, 1) if age_minutes is not None else None,
-            "dispatched": False,
-            "reason": reason,
-        }
-
         if not should_dispatch:
+            status = {
+                "checked_at": now,
+                "cron": cron,
+                "state_age_minutes": round(age_minutes, 1) if age_minutes is not None else None,
+                "dispatched": False,
+                "reason": reason,
+            }
             await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
             return
 
-        token = str(getattr(env, "GITHUB_DISPATCH_TOKEN", ""))
-        if not token:
-            status["error"] = "GITHUB_DISPATCH_TOKEN is not configured"
-            await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
-            raise RuntimeError(status["error"])
-
-        response = await fetch(
-            GITHUB_DISPATCH_URL,
-            method="POST",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {token}",
-                "X-GitHub-Api-Version": "2026-03-10",
-                "User-Agent": "GeminiDNSRadar-Cloudflare-Scheduler/1.0",
-                "Content-Type": "application/json",
-            },
-            body=json.dumps({"ref": "main", "inputs": {"source": "cloudflare"}}),
-        )
-
-        status["github_status"] = int(response.status)
-        if 200 <= response.status < 300:
-            status["dispatched"] = True
-            status["reason"] = reason + "; GitHub workflow dispatched"
-            await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
-            return
-
-        body = await response.text()
-        status["error"] = f"GitHub dispatch HTTP {response.status}: {str(body)[:500]}"
+        status = await _dispatch_github(env, reason, cron)
+        status["state_age_minutes"] = round(age_minutes, 1) if age_minutes is not None else None
         await env.STATE.put(SCHEDULER_KEY, json.dumps(status, ensure_ascii=False))
-        raise RuntimeError(status["error"])
+        if status.get("error"):
+            raise RuntimeError(status["error"])
 
     async def fetch(self, request):
         url = urlparse(request.url)
@@ -239,6 +253,12 @@ class Default(WorkerEntrypoint):
             if raw is None:
                 return _json_response({"status": "waiting_for_first_cron"})
             return Response(str(raw), headers={"content-type": "application/json; charset=utf-8", "cache-control": "no-store"})
+
+        if path == "/api/scheduler/test" and request.method == "POST":
+            if not _authorized(request, self.env):
+                return _json_response({"error": "unauthorized"}, 401)
+            status = await _dispatch_github(self.env, "manual scheduler diagnostic")
+            return _json_response(status, 200 if status.get("dispatched") else 502)
 
         if path == "/api/state" and request.method == "GET":
             if not _authorized(request, self.env):
