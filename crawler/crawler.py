@@ -81,14 +81,40 @@ def fetch_json(url: str, timeout: float = 12.0):
 def api_json(path: str, method: str = "GET", payload=None):
     if not PUBLISH_URL or not PUBLISH_TOKEN:
         raise RuntimeError("PUBLISH_URL and PUBLISH_TOKEN must be configured")
+
     data = None
-    headers = {"Authorization": f"Bearer {PUBLISH_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {PUBLISH_TOKEN}",
+        "Accept": "application/json",
+        "User-Agent": "GeminiDNSRadar/1.0",
+    }
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(f"{PUBLISH_URL}{path}", data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=25) as response:
-        return json.loads(response.read().decode("utf-8"))
+
+    url = f"{PUBLISH_URL}{path}"
+    retryable_statuses = {429, 500, 502, 503, 504}
+    attempts = 5
+
+    for attempt in range(1, attempts + 1):
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=25) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code not in retryable_statuses or attempt == attempts:
+                raise
+            delay = min(8, 2 ** (attempt - 1))
+            print(f"Worker API transient HTTP {exc.code} for {method} {path}; retry {attempt}/{attempts} in {delay}s")
+            time.sleep(delay)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            if attempt == attempts:
+                raise
+            delay = min(8, 2 ** (attempt - 1))
+            print(f"Worker API transient error for {method} {path}: {exc}; retry {attempt}/{attempts} in {delay}s")
+            time.sleep(delay)
+
+    raise RuntimeError(f"Worker API request failed after {attempts} attempts: {method} {path}")
 
 
 def normalize_host(value: str) -> str | None:
