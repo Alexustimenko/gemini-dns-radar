@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import importlib.util
 import json
@@ -83,16 +84,30 @@ def normalize_state(state: dict) -> tuple[dict, bool]:
     return state, changed
 
 
-# Protect the old crawler itself: every GET /api/state is normalized before
-# crawler.py sees it. This does not depend on Cloudflare KV propagation speed.
+# Keep the state just published by crawler.py in memory. Reading it back from
+# Cloudflare immediately after a write is unnecessary and was causing transient
+# 500/503 failures to abort otherwise successful scans.
 _original_api_json = core.api_json
+_cached_state: dict | None = None
 
 
 def safe_api_json(path: str, method: str = "GET", payload=None):
+    global _cached_state
+
+    if path == "/api/state" and method == "GET" and _cached_state is not None:
+        return copy.deepcopy(_cached_state)
+
     data = _original_api_json(path, method=method, payload=payload)
+
     if path == "/api/state" and method == "GET":
         normalized, _ = normalize_state(data)
+        _cached_state = copy.deepcopy(normalized)
         return normalized
+
+    if path == "/api/publish" and method == "POST" and isinstance(payload, dict):
+        normalized, _ = normalize_state(copy.deepcopy(payload))
+        _cached_state = normalized
+
     return data
 
 
@@ -204,8 +219,11 @@ def attach_radar(previous: dict, state: dict, emergency_used: bool, base_scanned
 
 
 def main() -> None:
+    global _cached_state
+
     previous_raw = _original_api_json("/api/state")
     previous, changed = normalize_state(previous_raw)
+    _cached_state = copy.deepcopy(previous)
 
     # Persist the cleanup too, but crawler safety does not depend on this write.
     if changed:
@@ -216,6 +234,7 @@ def main() -> None:
     print(f"Radar mode=normal scan_limit={BASE_SCAN_LIMIT}")
     core.main()
 
+    # Served from the in-process cache populated by the successful publish above.
     first_state = core.api_json("/api/state")
     base_scanned = int((first_state.get("scan") or {}).get("scanned_this_run", 0))
 
