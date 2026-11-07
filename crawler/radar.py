@@ -224,35 +224,46 @@ def main() -> None:
     previous_raw = _original_api_json("/api/state")
     previous, changed = normalize_state(previous_raw)
     _cached_state = copy.deepcopy(previous)
-
-    # Persist the cleanup too, but crawler safety does not depend on this write.
     if changed:
-        print("Radar: legacy state detected; normalizing before scan")
-        _original_api_json("/api/publish", method="POST", payload=previous)
+        print("Radar: legacy state normalized in memory")
 
+    # Do the DNS work on the GitHub runner, not in the Cloudflare Worker.
+    # Do not publish intermediate results or immediately re-read KV.
     core.SCAN_LIMIT = BASE_SCAN_LIMIT
     print(f"Radar mode=normal scan_limit={BASE_SCAN_LIMIT}")
-    core.main()
-
-    # Served from the in-process cache populated by the successful publish above.
-    first_state = core.api_json("/api/state")
+    first_state = core.main(publish_state=False)
     base_scanned = int((first_state.get("scan") or {}).get("scanned_this_run", 0))
 
     emergency_used = emergency_needed(previous, first_state)
-
     if emergency_used:
         print(
             "OUTAGE RADAR: instability detected; "
             f"switching to emergency scan_limit={EMERGENCY_SCAN_LIMIT}"
         )
         core.SCAN_LIMIT = max(BASE_SCAN_LIMIT, EMERGENCY_SCAN_LIMIT)
-        core.main()
-        final_state = core.api_json("/api/state")
+        _cached_state = copy.deepcopy(first_state)
+        final_state = core.main(publish_state=False)
     else:
         final_state = first_state
 
     final_state = attach_radar(previous, final_state, emergency_used, base_scanned)
+
+    # Exactly one full-state write per run, using a streaming Worker endpoint.
+    # Publish the small public view separately; site and cron never load the
+    # large historical state into Cloudflare's Worker memory.
     result = _original_api_json("/api/publish", method="POST", payload=final_state)
+    if not result.get("ok"):
+        raise RuntimeError("Full state publish failed: " + str(result))
+
+    summary = {
+        "updated_at": final_state["updated_at"],
+        "next_expected_update": final_state["next_expected_update"],
+        "scan": final_state["scan"],
+        "top10": final_state["top10"],
+    }
+    public_result = _original_api_json("/api/summary", method="POST", payload=summary)
+    if not public_result.get("ok"):
+        raise RuntimeError("Public summary publish failed: " + str(public_result))
 
     outage = final_state["scan"]["outage"]
     print(
@@ -261,7 +272,7 @@ def main() -> None:
         f"now={outage['working_now']} failed={outage['failed_count']} "
         f"new={outage['new_count']} mode={final_state['scan']['mode']}"
     )
-    print(json.dumps(result, ensure_ascii=False))
+    print(json.dumps(public_result, ensure_ascii=False))
 
 
 if __name__ == "__main__":
