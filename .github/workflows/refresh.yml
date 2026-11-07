@@ -83,7 +83,7 @@ jobs:
           print("Last successful update:", updated_at or "none")
           print("Decision:", "RUN" if should_run else "SKIP", "-", reason)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              fh.write(f"run={'true' if should_run else 'false'}\\n")
+              fh.write(f"run={'true' if should_run else 'false'}\n")
           PY
 
       - name: Run Outage Radar
