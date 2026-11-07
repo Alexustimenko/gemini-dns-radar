@@ -436,7 +436,7 @@ def select_scan(candidates: dict[str, Candidate], previous: dict) -> list[Candid
     return (selected + remaining)[:SCAN_LIMIT]
 
 
-def main():
+def main(publish_state=True):
     previous_state = api_json("/api/state")
     queue_payload = api_json("/api/queue")
     previous = previous_state.get("candidates", {})
@@ -465,11 +465,18 @@ def main():
     new_records = {}
     for host, candidate in candidates.items():
         old = previous.get(host, {})
-        history = list(old.get("history", []))[-HISTORY_LIMIT:]
+        # Keep only the fields needed for uptime/streak scoring.
+        # Otherwise each run stores full A-record maps again in the history,
+        # progressively increasing KV payload and Worker memory pressure.
+        history = [
+            {"checked_at": item["checked_at"], "gemini_likely": bool(item.get("gemini_likely"))}
+            for item in (old.get("history") or [])[-HISTORY_LIMIT:]
+            if isinstance(item, dict) and item.get("checked_at")
+        ]
         last = old.get("last")
         if host in results:
             last = results[host]
-            history.append(last)
+            history.append({"checked_at": last["checked_at"], "gemini_likely": bool(last.get("gemini_likely"))})
             history = history[-HISTORY_LIMIT:]
         record = {
             "host": host,
@@ -501,10 +508,12 @@ def main():
         "candidates": new_records,
     }
 
-    result = api_json("/api/publish", method="POST", payload=state)
-    print(json.dumps(result, ensure_ascii=False))
+    if publish_state:
+        result = api_json("/api/publish", method="POST", payload=state)
+        print(json.dumps(result, ensure_ascii=False))
     for idx, item in enumerate(top10, 1):
         print(f"#{idx} {item['host']} score={item['score']} uptime24={item['uptime_24h']}%")
+    return state
 
 
 if __name__ == "__main__":
